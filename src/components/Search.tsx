@@ -167,6 +167,7 @@ const Search = ({
   console.log("isLoading:", isLoading)
   console.log("isError:", isError)
   console.log("searches:", searches)
+  console.log("searches?.results?.length:", searches?.length)
   console.log("searches?.count:", searches?.count)
   const { data: suggestion } = useGetSuggestion(debouncedSearchTerm ?? "")
 
@@ -497,7 +498,7 @@ const Search = ({
           <div className="flex flex-col-reverse justify-between gap-5 sm:flex-row sm:items-center">
             {isLoading ? (
               ""
-            ) : searches && searches.length > 0 ? (
+            ) : searches && searches.count > 0 ? (
               <>
                 <h1 className="text-2xl font-bold lg:text-2xl">
                   {searches?.count} Results
@@ -569,7 +570,7 @@ const Search = ({
                   Something went wrong
                 </p>
               </div>
-            ) : searches && searches.length > 0 ? (
+            ) : searches ? (
               searches.map((study, i: number) => (
                 <StudyList key={i} study={study} />
               ))
@@ -578,12 +579,15 @@ const Search = ({
             )}
           </div>
           <div>
-            {isError || (searches && searches.length <= 0) ? null : (
+            {isError ||
+            (searches &&
+              Array.isArray(searches) &&
+              searches.length <= 0) ? null : (
               <PaginationControls
                 prevPage={prevPage}
                 nextPage={nextPage}
                 page={Number(filter.page) || 1}
-                count={searches?.count}
+                count={searches?.length}
                 isLoading={isLoading}
               />
             )}
