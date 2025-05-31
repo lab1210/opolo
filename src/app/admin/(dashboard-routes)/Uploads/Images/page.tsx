@@ -17,7 +17,9 @@ const UploadImages = () => {
   const [selectedId, setSelectedId] = useState("")
   const [file, setFile] = useState<File | null>(null)
   const [caption, setCaption] = useState("")
-  const [images, setImages] = useState([])
+
+  const [images, setImages] = useState<StudyImage[]>([])
+
   const [currentPage, setCurrentPage] = useState(1)
 
   const pageSize = 6
@@ -28,6 +30,11 @@ const UploadImages = () => {
     currentPage * pageSize
   )
 
+  type StudyImage = {
+    id: number
+    image: string
+    caption: string
+  }
   useEffect(() => {
     const loadStudies = async () => {
       try {
