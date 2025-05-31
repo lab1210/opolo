@@ -47,7 +47,14 @@ const Opolo: React.FC = () => {
     answer: {
       text: string
       images: string[]
-      sources: string[]
+      sources: {
+        title: string
+        lead_author: string
+        journal: string
+        year: string
+        pdf_url: string
+        doi: string
+      }[]
     }
   }
 
