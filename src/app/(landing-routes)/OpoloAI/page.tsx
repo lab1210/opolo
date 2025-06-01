@@ -39,7 +39,10 @@ const Opolo: React.FC = () => {
     response: string
     answer: {
       text: string
-      images: string[]
+      images: {
+        image_url: string
+        caption: string
+      }[]
       sources: {
         title: string
         lead_author: string
