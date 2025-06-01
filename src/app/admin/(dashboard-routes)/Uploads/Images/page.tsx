@@ -64,7 +64,7 @@ const UploadImages = () => {
     }
 
     try {
-      const response = await uploadImage(Number(selectedId), caption, file)
+      const response = await uploadImage(selectedId, caption, file)
       toast.success(response.message)
       setFile(null)
       setCaption("")
