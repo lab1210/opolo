@@ -11,7 +11,7 @@ export const fetchShortStudies = async () => {
   }
 }
 
-export const uploadPdf = async (studyId: number, file) => {
+export const uploadPdf = async (studyId: number, file: string) => {
   const formData = new FormData()
   formData.append("study_id", studyId)
   formData.append("file", file)
