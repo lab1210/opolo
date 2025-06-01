@@ -12,8 +12,12 @@ import { FaRegThumbsUp } from "react-icons/fa"
 import { FaRegThumbsDown } from "react-icons/fa"
 import toast from "react-hot-toast"
 import { IoCloudDownloadOutline } from "react-icons/io5"
-import { LuLink } from "react-icons/lu"
-import { FaFilePdf } from "react-icons/fa6"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+import remarkMath from "remark-math"
+import rehypeKatex from "rehype-katex"
+import "katex/dist/katex.min.css"
+
 import {
   chatWithMemory,
   deleteChatMessage,
@@ -144,13 +148,84 @@ const Opolo: React.FC = () => {
     if (storedMode) setMode(storedMode)
   }, [])
 
-  const simulateTyping = (text: string, callback: (value: string) => void) => {
+  const formatMath = (text) => {
+    if (!text) return text
+
+    // If text already includes properly formatted LaTeX ($ or $$), skip formatting
+    if (/\${1,2}.*?\${1,2}/.test(text)) return text
+
+    // Handle inline formulas: [inline: formula] -> $formula$
+    let formatted = text.replace(
+      /\[inline:\s*([\s\S]*?)\]/g,
+      (_, inlineFormula) => `$${inlineFormula.trim()}$`
+    )
+
+    // Handle block formulas: [ formula ] -> $$formula$$
+    // This pattern looks for [ followed by content that may include spaces,
+    // LaTeX commands, and various mathematical symbols, then closes with ]
+    formatted = formatted.replace(
+      /\[\s*([\s\S]*?)\s*\]/g,
+      (match, blockFormula) => {
+        const trimmedFormula = blockFormula.trim()
+
+        // More specific check for mathematical formulas
+        // Exclude common descriptive text patterns
+        const isDescriptiveText =
+          /^(number of|total number of|text|label|note|description)/i.test(
+            trimmedFormula
+          )
+
+        // Check if this looks like a mathematical formula
+        // (contains LaTeX commands, fractions, mathematical operators, etc.)
+        const isMathFormula =
+          /[\\=+\-*/^_{}\(\)]+|\\[a-zA-Z]+|frac|text|times|cdot|sum|int|alpha|beta|gamma|delta/.test(
+            trimmedFormula
+          ) && !isDescriptiveText
+
+        if (isMathFormula) {
+          return `\n\n$$${trimmedFormula}$$\n\n`
+        } else {
+          // If it doesn't look like math, leave it as is
+          return match
+        }
+      }
+    )
+
+    return formatted
+  }
+
+  const simulateTyping = (
+    text: string,
+    callback: (value: string) => void,
+    done?: () => void
+  ) => {
     let index = 0
-    const interval = setInterval(() => {
-      callback(text.slice(0, index + 1))
-      index++
-      if (index === text.length) clearInterval(interval)
-    }, 25) // Adjust speed here
+
+    const typingSpeed = (char: string) => {
+      if (char === "." || char === "," || char === ":" || char === ";")
+        return 50
+      if (char === "\n") return 0
+      return 10
+    }
+
+    const typeNext = () => {
+      if (index <= text.length) {
+        const current = text.slice(0, index + 1)
+        callback(current)
+        index++
+
+        // Scroll to latest text during typing
+        endRef.current?.scrollIntoView({ behavior: "smooth" })
+
+        setTimeout(() => {
+          typeNext()
+        }, typingSpeed(text[index]))
+      } else {
+        done?.()
+      }
+    }
+
+    typeNext()
   }
 
   const handleSend = async () => {
@@ -169,13 +244,17 @@ const Opolo: React.FC = () => {
         question: trimmedInput,
         session_id: selectedChat ?? undefined,
       })
+      const formattedAnswer = formatMath(res.answer)
 
-      simulateTyping(res.answer, (value) => setStreamedText(value))
+      simulateTyping(formattedAnswer, (value) => {
+        setStreamedText(value)
+        endRef.current?.scrollIntoView({ behavior: "smooth" })
+      })
 
       const newMessage = {
         response: trimmedInput,
         answer: {
-          text: res.answer,
+          text: formattedAnswer,
           images: res.images,
           sources: res.sources,
         },
@@ -485,7 +564,29 @@ const Opolo: React.FC = () => {
                         <div className="h-full w-full overflow-hidden md:pr-12">
                           {currentTab === "Answer" && (
                             <div>
-                              <p>{message.answer.text}</p>
+                              <article className="markdown">
+                                {isSending &&
+                                index ===
+                                  getSelectedChat()?.messages.length - 1 ? (
+                                  <div className="whitespace-pre-wrap font-medium">
+                                    <ReactMarkdown
+                                      remarkPlugins={[remarkGfm, remarkMath]}
+                                      rehypePlugins={[rehypeKatex]}
+                                    >
+                                      {streamedText}
+                                    </ReactMarkdown>
+                                    <span className="animate-blink">|</span>
+                                  </div>
+                                ) : (
+                                  <ReactMarkdown
+                                    remarkPlugins={[remarkGfm, remarkMath]}
+                                    rehypePlugins={[rehypeKatex]}
+                                  >
+                                    {formatMath(message.answer.text)}
+                                  </ReactMarkdown>
+                                )}
+                              </article>
+
                               <div className="mt-5 flex flex-wrap gap-5 md:flex-nowrap">
                                 <button
                                   className={`flex items-center gap-2 rounded-xl border border-[#8E8E8E] p-1 px-3 text-sm hover:backdrop-opacity-20 lg:text-base ${mode === "dark" ? "hover:bg-[#8E8E8E]" : "hover:bg-[#8E8E8E]"}`}
@@ -628,7 +729,7 @@ const Opolo: React.FC = () => {
                       onClick={() =>
                         endRef.current?.scrollIntoView({ behavior: "smooth" })
                       }
-                      className="fixed bottom-20 right-6 z-50 rounded-full bg-orange-500 px-4 py-2 text-white shadow-lg transition-all hover:bg-orange-600"
+                      className="fixed bottom-36 right-6 z-50 rounded-full bg-orange-500 px-4 py-2 text-white shadow-lg transition-all hover:bg-orange-600"
                       title="Scroll to latest message"
                     >
                       ↧
