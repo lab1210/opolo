@@ -5,22 +5,26 @@ import React, { useEffect, useRef, useState } from "react"
 import FirstModal from "./FirstModal"
 import { CiSearch } from "react-icons/ci"
 import { TbSend2 } from "react-icons/tb"
+import chatData from "./chatdata"
 import { IoShareSocialOutline } from "react-icons/io5"
 import { FiCopy } from "react-icons/fi"
 import { FaRegThumbsUp } from "react-icons/fa"
 import { FaRegThumbsDown } from "react-icons/fa"
 import toast from "react-hot-toast"
 import { IoCloudDownloadOutline } from "react-icons/io5"
-import ReactMarkdown from "react-markdown"
+import "katex/dist/katex.min.css"
 import remarkGfm from "remark-gfm"
-import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
+import remarkMath from "remark-math"
+
+import ReactMarkdown from "react-markdown"
 import {
   chatWithMemory,
   deleteChatMessage,
   deleteChatSession,
   getChatSessions,
 } from "@/services/opolo"
+import TypewriterMarkdown from "./Typewrite"
 
 const Opolo: React.FC = () => {
   const [modalOpen, setModalOpen] = useState<boolean>(true)
@@ -35,6 +39,34 @@ const Opolo: React.FC = () => {
   const [streamedText, setStreamedText] = useState<string>("")
   const endRef = useRef<HTMLDivElement | null>(null)
   const [atBottom, setAtBottom] = useState<boolean>(true)
+  const [typingIndex, setTypingIndex] = useState<number | null>(null)
+  const [userScrolledUp, setUserScrolledUp] = useState(false)
+
+  // Add typing indicator component
+  const TypingIndicator = () => (
+    <div className="flex items-center gap-2 px-4 py-2">
+      <div className="flex space-x-1">
+        <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]"></div>
+        <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]"></div>
+        <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400"></div>
+      </div>
+      <span className="text-lg text-gray-500">
+        <span className="text-sm">AI is thinking</span>...
+      </span>
+    </div>
+  )
+
+  useEffect(() => {
+    if (streamedText && endRef.current && !userScrolledUp) {
+      endRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [streamedText, userScrolledUp])
+
+  useEffect(() => {
+    if (endRef.current && atBottom) {
+      endRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [chatInfo])
 
   interface Message {
     response: string
@@ -53,6 +85,8 @@ const Opolo: React.FC = () => {
         doi: string
       }[]
     }
+    suggested_questions?: string[]
+    tempId?: number // Add this line
   }
 
   interface Chat {
@@ -77,6 +111,11 @@ const Opolo: React.FC = () => {
     return null
   }
 
+  const currentChat = getSelectedChat()
+  const lastMessageIndex = currentChat?.messages.length
+    ? currentChat.messages.length - 1
+    : -1
+
   const handleChatClick = (id: number) => {
     setSelectedChat(id)
   }
@@ -98,14 +137,17 @@ const Opolo: React.FC = () => {
 
           sessions.forEach((session) => {
             const createdAt = new Date(session.created_at)
-            const diffDays = Math.floor(
-              (now.getTime() - createdAt.getTime()) / (1000 * 3600 * 24)
-            )
+            const diffTime = now.getTime() - createdAt.getTime()
+            const diffDays = Math.floor(diffTime / (1000 * 3600 * 24))
 
             let section = ""
-            if (diffDays < 1) section = "Today"
-            else if (diffDays < 7) section = "Past 7 Days"
-            else section = "Earlier"
+            if (diffDays === 0) {
+              section = "Today"
+            } else if (diffDays < 7) {
+              section = "Past 7 Days"
+            } else {
+              section = "Earlier"
+            }
 
             const chat: Chat = {
               id: session.id,
@@ -120,7 +162,7 @@ const Opolo: React.FC = () => {
                 },
               })),
             }
-            console.log("chat:", chat)
+
             if (!grouped[section]) {
               grouped[section] = []
             }
@@ -129,7 +171,6 @@ const Opolo: React.FC = () => {
 
           return grouped
         }
-
         const grouped = groupChatsByTime(sessions)
         setChatInfo(grouped)
       } catch (err) {
@@ -145,188 +186,176 @@ const Opolo: React.FC = () => {
     if (storedMode) setMode(storedMode)
   }, [])
 
-  const formatMath = (text: string) => {
-    if (!text) return text
-
-    // If text already includes MathJax delimiters, return as is
-    if (/\\\(.*?\\\)|\\{1,2}\[.*?\\\]|\$\$.*?\$\$|\$.*?\$/.test(text))
-      return text
-
-    // Handle inline formulas: [inline: formula] -> \(formula\)
-    let formatted = text.replace(
-      /\[inline:\s*([\s\S]*?)\]/g,
-      (_, inlineFormula) => `\\(${inlineFormula.trim()}\\)`
-    )
-
-    // Handle block formulas: [ formula ] -> $$formula$$
-    // But be more conservative about what we consider math
-    formatted = formatted.replace(
-      /\[\s*([\s\S]*?)\s*\]/g,
-      (match, blockFormula) => {
-        const trimmedFormula = blockFormula.trim()
-
-        // Skip descriptive text patterns
-        const isDescriptiveText =
-          /^(number of|total number of|text of|individuals with|frequency of|allele|genotype)/i.test(
-            trimmedFormula
-          )
-
-        // Only convert if it looks like actual LaTeX math
-        const hasLatexCommands = /\\[a-zA-Z]+/.test(trimmedFormula)
-        const hasFrac = /\\?frac/.test(trimmedFormula)
-        const hasMathSymbols =
-          /[=+\-*/^_{}()∑∫αβγδ]/.test(trimmedFormula) &&
-          !/^[a-zA-Z\s]+$/.test(trimmedFormula)
-
-        const isMathFormula =
-          (hasLatexCommands || hasFrac || hasMathSymbols) && !isDescriptiveText
-
-        if (isMathFormula) {
-          return `\n\n$$${trimmedFormula}$$\n\n`
-        } else {
-          // Leave descriptive text as is
-          return match
-        }
-      }
-    )
-
-    return formatted
-  }
-  const simulateTyping = (
-    text: string,
-    callback: (value: string) => void,
-    done?: () => void
-  ) => {
+  const simulateTyping = (text: string, callback: (value: string) => void) => {
     let index = 0
-
-    const typingSpeed = (char: string) => {
-      if (char === "." || char === "," || char === ":" || char === ";")
-        return 50
-      if (char === "\n") return 0
-      return 10
-    }
-
-    const typeNext = () => {
-      if (index <= text.length) {
-        const current = text.slice(0, index + 1)
-        callback(current)
-        index++
-
-        // Scroll to latest text during typing
-        endRef.current?.scrollIntoView({ behavior: "smooth" })
-
-        setTimeout(() => {
-          typeNext()
-        }, typingSpeed(text[index]))
-      } else {
-        done?.()
-      }
-    }
-
-    typeNext()
+    const interval = setInterval(() => {
+      callback(text.slice(0, index + 1))
+      index++
+      if (index === text.length) clearInterval(interval)
+    }, 25) // Adjust speed here
   }
 
-  const handleSend = async () => {
+  const handleSend = async (inputOverride?: string) => {
     if (isSending) return
-    const trimmedInput = userInput.trim()
+
+    const trimmedInput = inputOverride || userInput.trim()
     if (!trimmedInput) return
 
     setIsSending(true)
     setUserInput("")
     setStreamedText("")
 
+    // Create temporary message ID or use timestamp
+    const tempId = Date.now()
+
     try {
+      // ---- STEP 1: Immediately add user's message to chat ----
+      setChatInfo((prev) => {
+        const updated: ChatData = { ...prev }
+        let chatExists = false
+
+        // If we have a selected chat, add message to it
+        if (selectedChat) {
+          for (const section in updated) {
+            updated[section] = updated[section].map((chat) => {
+              if (chat.id === selectedChat) {
+                chatExists = true
+                return {
+                  ...chat,
+                  messages: [
+                    ...chat.messages,
+                    {
+                      response: trimmedInput,
+                      answer: {
+                        text: "", // Empty answer for now
+                        images: [],
+                        sources: [],
+                      },
+                      tempId, // Mark as temporary
+                    },
+                  ],
+                }
+              }
+              return chat
+            })
+          }
+        }
+
+        // If no selected chat or chat not found, create new chat
+        if (!selectedChat || !chatExists) {
+          if (!updated["Today"]) {
+            updated["Today"] = []
+          }
+          updated["Today"].unshift({
+            id: tempId, // Temporary ID until we get real one from API
+            title:
+              trimmedInput.slice(0, 30) +
+              (trimmedInput.length > 30 ? "..." : ""),
+            messages: [
+              {
+                response: trimmedInput,
+                answer: {
+                  text: "", // Empty answer for now
+                  images: [],
+                  sources: [],
+                },
+                tempId, // Mark as temporary
+              },
+            ],
+          })
+          setSelectedChat(tempId) // Set temporary selected chat
+        }
+
+        return updated
+      })
+
       const email = userEmail || localStorage.getItem("opolo_email") || ""
       const res = await chatWithMemory({
         email,
         question: trimmedInput,
         session_id: selectedChat ?? undefined,
       })
-      const formattedAnswer = formatMath(res.answer)
 
-      simulateTyping(formattedAnswer, (value) => {
-        setStreamedText(value)
-        endRef.current?.scrollIntoView({ behavior: "smooth" })
-      })
-
-      const newMessage = {
-        response: trimmedInput,
-        answer: {
-          text: formattedAnswer,
-          images: res.images,
-          sources: res.sources,
-        },
-      }
-
+      // ---- STEP 2: Update with actual response ----
       setChatInfo((prev) => {
-        const updated: ChatData = {}
-        for (const section in prev) {
-          updated[section] = prev[section].map((chat) => {
-            if (chat.id === res.session_id) {
+        const updated: ChatData = { ...prev }
+        let newIndex: number | null = null
+
+        for (const section in updated) {
+          updated[section] = updated[section].map((chat) => {
+            // Match either by temporary ID or real session ID
+            if (chat.id === tempId || chat.id === res.session_id) {
+              // Find the temporary message and replace it
+              const messages = chat.messages.map((msg) => {
+                if ((msg as any).tempId === tempId) {
+                  return {
+                    response: trimmedInput,
+                    answer: {
+                      text: res.answer,
+                      images: res.images,
+                      sources: res.sources,
+                    },
+                    suggested_questions: res.suggested_questions || [],
+                  }
+                }
+                return msg
+              })
+
+              newIndex = messages.length - 1
               return {
                 ...chat,
-                messages: [...chat.messages, newMessage],
+                id: res.session_id, // Ensure we use the real session ID
+                title: res.title || chat.title,
+                messages,
               }
             }
             return chat
           })
         }
-        const chatExists = Object.values(prev)
-          .flat()
-          .some((c) => c.id === res.session_id)
-        if (!chatExists) {
-          updated["Today"] = [
-            {
-              id: res.session_id,
-              title: res.title || "New Chat",
-              messages: [newMessage],
-            },
-            ...(prev["Today"] || []),
-          ]
+
+        setTimeout(() => setTypingIndex(newIndex), 0)
+        return updated
+      })
+
+      setSelectedChat(res.session_id) // Ensure we're using the real session ID
+
+      // ---- STEP 3: Animate the answer ----
+      simulateTyping(res.answer, (value) => {
+        setStreamedText(value)
+        if (value === res.answer) {
+          setTypingIndex(null)
+        }
+      })
+    } catch (err) {
+      console.error("Error sending message:", err)
+      toast.error("Failed to send message")
+
+      // On error, remove the temporary message
+      setChatInfo((prev) => {
+        const updated: ChatData = { ...prev }
+        for (const section in updated) {
+          updated[section] = updated[section]
+            .map((chat) => {
+              if (chat.id === tempId || chat.id === selectedChat) {
+                return {
+                  ...chat,
+                  messages: chat.messages.filter(
+                    (msg) => (msg as any).tempId !== tempId
+                  ),
+                }
+              }
+              return chat
+            })
+            .filter((chat) => chat.messages.length > 0) // Remove empty chats
         }
         return updated
       })
-      setSelectedChat(res.session_id)
-    } catch (err) {
-      console.error(err)
-      toast.error("Failed to send message")
+
       setUserInput(trimmedInput)
     } finally {
       setIsSending(false)
     }
   }
-
-  //delete singlemsg
-  // const handleDeleteMessage = async (messageIndex: number) => {
-  //   try {
-  //     const chat = getSelectedChat()
-  //     const email = userEmail || ""
-  //     const messageId = chat?.messages[messageIndex]?.id // You need to include ID in your message object if not present yet
-  //     if (!messageId) return
-  //     await deleteChatMessage(messageId, email)
-
-  //     setChatInfo((prev) => {
-  //       const updated = { ...prev }
-  //       for (const section in updated) {
-  //         updated[section] = updated[section].map((chat) => {
-  //           if (chat.id === selectedChat) {
-  //             const updatedMessages = [...chat.messages]
-  //             updatedMessages.splice(messageIndex, 1)
-  //             return { ...chat, messages: updatedMessages }
-  //           }
-  //           return chat
-  //         })
-  //       }
-  //       return updated
-  //     })
-  //     toast.success("Message deleted")
-  //   } catch (error) {
-  //     toast.error("Failed to delete message")
-  //     console.error(error)
-  //   }
-  // }
-
-  //delete session
 
   const handleDeleteSession = async (chatId: number) => {
     try {
@@ -354,7 +383,10 @@ const Opolo: React.FC = () => {
 
   useEffect(() => {
     const savedEmail = localStorage.getItem("opolo_email")
-    if (savedEmail) setUserEmail(savedEmail)
+    if (savedEmail) {
+      setUserEmail(savedEmail)
+      setModalOpen(false)
+    }
   }, [])
 
   const handleToggle = () => {
@@ -376,7 +408,7 @@ const Opolo: React.FC = () => {
 
     const shareText = isURL
       ? `📄 Here's a PDF you might find useful:\n${content}\n\n— Shared from ỌpọlọAI`
-      : `✨ “${content}” ✨\n\n— from ỌpọlọAI\n\n📢 *Check out more great content at ỌpọlọAI!*`
+      : `✨ "${content}" ✨\n\n— from ỌpọlọAI\n\n📢 *Check out more great content at ỌpọlọAI!*`
 
     if (navigator.share) {
       navigator
@@ -407,10 +439,15 @@ const Opolo: React.FC = () => {
 
   useEffect(() => {
     const handleScroll = () => {
-      const bottom =
-        Math.ceil(window.innerHeight + window.scrollY) >=
-        document.documentElement.scrollHeight - 10
-      setAtBottom(bottom)
+      const scrollTop = window.scrollY || document.documentElement.scrollTop
+      const scrollHeight = document.documentElement.scrollHeight
+      const clientHeight = document.documentElement.clientHeight
+
+      // If user scrolls up more than 100px from bottom, mark as manual scroll
+      setUserScrolledUp(scrollTop + clientHeight < scrollHeight - 100)
+
+      // For atBottom detection (keep your existing logic)
+      setAtBottom(scrollTop + clientHeight >= scrollHeight - 10)
     }
 
     window.addEventListener("scroll", handleScroll)
@@ -419,7 +456,7 @@ const Opolo: React.FC = () => {
 
   return (
     <div
-      className={`h-full overflow-hidden font-[Arial] ${mode !== "light" ? "text-white" : ""}`}
+      className={`h-full overflow-hidden font-[Arial] text-xs md:text-base ${mode !== "light" ? "text-white" : ""}`}
     >
       <div className="h-full md:grid md:grid-cols-[250px_auto]">
         <div
@@ -487,9 +524,9 @@ const Opolo: React.FC = () => {
             {Object.entries(chatInfo).map(([section, chats]) => (
               <div className="" key={section}>
                 <p className="mb-2 font-bold">
-                  {section === "today"
+                  {section === "Today"
                     ? "TODAY"
-                    : section === "past7Days"
+                    : section === "Past 7 Days"
                       ? "PAST 7 DAYS"
                       : "EARLIER"}
                 </p>
@@ -521,7 +558,7 @@ const Opolo: React.FC = () => {
             style={{
               backgroundImage:
                 mode === "light"
-                  ? "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0) 80%, #FF8F4C 100%), url('/maplight.png')"
+                  ? "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0) 80%, #FF8F4C 100%)"
                   : "linear-gradient(to bottom, rgba(33,32,32,0) 0%, rgba(33,32,32,0) 80%, #FF8F4C 100%), url('/map-dark.png') ",
               backgroundSize: "cover",
               backgroundPosition: "center",
@@ -562,29 +599,23 @@ const Opolo: React.FC = () => {
                         <div className="h-full w-full overflow-hidden md:pr-12">
                           {currentTab === "Answer" && (
                             <div>
-                              <article className="markdown">
-                                {isSending &&
-                                index ===
-                                  getSelectedChat()?.messages.length - 1 ? (
-                                  <div className="whitespace-pre-wrap font-medium">
-                                    <ReactMarkdown
-                                      remarkPlugins={[remarkGfm, remarkMath]}
-                                      rehypePlugins={[rehypeKatex]}
-                                    >
-                                      {streamedText}
-                                    </ReactMarkdown>
-                                    <span className="animate-blink">|</span>
-                                  </div>
-                                ) : (
+                              {index === typingIndex ? (
+                                <>
+                                  {!streamedText && <TypingIndicator />}
+                                  <TypewriterMarkdown
+                                    text={message.answer.text}
+                                  />
+                                </>
+                              ) : (
+                                <article className="markdown">
                                   <ReactMarkdown
                                     remarkPlugins={[remarkGfm, remarkMath]}
                                     rehypePlugins={[rehypeKatex]}
                                   >
-                                    {formatMath(message.answer.text)}
+                                    {message.answer.text}
                                   </ReactMarkdown>
-                                )}
-                              </article>
-
+                                </article>
+                              )}
                               <div className="mt-5 flex flex-wrap gap-5 md:flex-nowrap">
                                 <button
                                   className={`flex items-center gap-2 rounded-xl border border-[#8E8E8E] p-1 px-3 text-sm hover:backdrop-opacity-20 lg:text-base ${mode === "dark" ? "hover:bg-[#8E8E8E]" : "hover:bg-[#8E8E8E]"}`}
@@ -592,7 +623,6 @@ const Opolo: React.FC = () => {
                                     handleShare(message.answer.text)
                                   }
                                 >
-                                  Share{" "}
                                   <span>
                                     <IoShareSocialOutline />
                                   </span>
@@ -603,7 +633,6 @@ const Opolo: React.FC = () => {
                                   }
                                   className={`flex items-center gap-2 rounded-xl border border-[#8E8E8E] p-1 px-3 text-sm hover:backdrop-opacity-20 lg:text-base ${mode === "dark" ? "hover:bg-[#8E8E8E]" : "hover:bg-[#8E8E8E]/40"}`}
                                 >
-                                  Copy{" "}
                                   <span>
                                     <FiCopy />
                                   </span>
@@ -611,7 +640,6 @@ const Opolo: React.FC = () => {
                                 <button
                                   className={`flex items-center gap-2 rounded-xl border border-[#8E8E8E] p-1 px-3 text-sm hover:backdrop-opacity-20 lg:text-base ${mode === "dark" ? "hover:bg-[#8E8E8E]" : "hover:bg-[#8E8E8E]/40"}`}
                                 >
-                                  Good Response
                                   <span>
                                     <FaRegThumbsUp />
                                   </span>
@@ -619,23 +647,37 @@ const Opolo: React.FC = () => {
                                 <button
                                   className={`flex items-center gap-2 rounded-xl border border-[#8E8E8E] p-1 px-3 text-sm hover:backdrop-opacity-20 lg:text-base ${mode === "dark" ? "hover:bg-[#8E8E8E]" : "hover:bg-[#8E8E8E]/40"}`}
                                 >
-                                  Poor Response
                                   <span>
                                     <FaRegThumbsDown />
                                   </span>
                                 </button>
                               </div>
+                              {message.suggested_questions &&
+                                message.suggested_questions.length > 0 && (
+                                  <div className="mt-5 space-y-2">
+                                    <p className="text-sm font-semibold text-[#EE7527]">
+                                      Suggested Questions:
+                                    </p>
+                                    <div className="flex flex-wrap gap-2">
+                                      {message.suggested_questions.map(
+                                        (suggestion, idx) => (
+                                          <button
+                                            key={idx}
+                                            onClick={() =>
+                                              handleSend(suggestion)
+                                            }
+                                            className="rounded-lg border border-[#ED6D1C] px-3 py-1 text-xs text-[#ED6D1C] transition hover:bg-[#ED6D1C] hover:text-white"
+                                          >
+                                            {suggestion}
+                                          </button>
+                                        )
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
                             </div>
                           )}
-                          {isSending && (
-                            <div className="animate-pulse rounded-md p-4">
-                              <p className="font-medium">🤖 AI is typing...</p>
-                              <p className="mt-1 whitespace-pre-line">
-                                {streamedText}
-                                <span className="animate-blink">|</span>
-                              </p>
-                            </div>
-                          )}
+
                           <div ref={endRef} />
                           {currentTab === "Image" && (
                             <div className="grid-col-1 grid gap-2 lg:grid-cols-3">
@@ -736,9 +778,11 @@ const Opolo: React.FC = () => {
                 </div>
               ) : (
                 <>
-                  <div className="flex h-full flex-col items-center justify-center text-center text-2xl font-bold">
-                    <p>Ask a question to get Started....</p>
-                  </div>
+                  {!isSending && (
+                    <div className="flex h-full flex-col items-center justify-center text-center text-2xl font-bold">
+                      <p>Ask a question to get Started....</p>
+                    </div>
+                  )}
                   {isSending && (
                     <div className="animate-pulse rounded-md p-4">
                       <p className="font-medium">🤖 AI is typing...</p>
@@ -752,6 +796,11 @@ const Opolo: React.FC = () => {
               )}
             </div>
             <div className="relative flex w-full items-center justify-center px-5 pb-12 md:px-16">
+              {isSending && (
+                <div className="absolute bottom-28 left-1/2 -translate-x-1/2 transform">
+                  <TypingIndicator />
+                </div>
+              )}
               <textarea
                 rows={1}
                 value={userInput}
@@ -780,7 +829,7 @@ const Opolo: React.FC = () => {
               className="flex flex-col items-center justify-end pb-5 text-xs md:text-sm"
               style={{ color: mode === "light" ? "#1D1D1D" : "" }}
             >
-              Ọpọlọ AI isn’t flawless — double-check important info.
+              Ọpọlọ AI isn't flawless — double-check important info.
             </div>
           </div>
         </div>
@@ -797,6 +846,18 @@ const Opolo: React.FC = () => {
           }
           .animate-blink {
             animation: blink 1s step-end infinite;
+          }
+          @keyframes bounce {
+            0%,
+            100% {
+              transform: translateY(0);
+            }
+            50% {
+              transform: translateY(-5px);
+            }
+          }
+          .animate-bounce {
+            animation: bounce 0.6s infinite;
           }
         `}</style>
       </div>
